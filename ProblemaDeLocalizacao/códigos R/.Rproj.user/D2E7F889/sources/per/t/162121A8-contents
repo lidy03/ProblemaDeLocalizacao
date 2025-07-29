@@ -1,0 +1,89 @@
+library(lpSolve)
+library(geobr)
+library(sf)
+library(units)
+library(ggplot2)
+library(dplyr)
+
+resolver_matrix_cobertura_conjuntos <- function(R_max_km, p) {
+  # Baixar setores censitários de Itacoatiara-AM
+  setores <- read_census_tract(code_tract = 1301902, year = 2010)
+  
+  # Filtrar apenas setores urbanos
+  setores_urbanos <- setores %>%
+    filter(zone == "URBANO", !is.na(name_neighborhood))
+  
+  # Verificar se há setores suficientes
+  if (nrow(setores_urbanos) < p) {
+    stop("Número insuficiente de setores urbanos para selecionar postos.")
+  }
+  
+  setores_urbanos$centroid <- st_centroid(setores_urbanos$geom)
+  coords_matrix <- st_coordinates(setores_urbanos$centroid)
+  
+  # Definir clusters para escolher pontos estratégicos
+  set.seed(42)
+  clusters <- kmeans(coords_matrix, centers = p, nstart = 100)
+  setores_urbanos$cluster <- as.factor(clusters$cluster)
+  
+  # Selecionar um setor representativo de cada cluster
+  setores_reduzidos <- setores_urbanos %>%
+    group_by(cluster) %>%
+    slice_min(order_by = st_distance(centroid, st_centroid(st_union(geom)))) %>%
+    ungroup()
+  
+  # Calcular matriz de distâncias geodésicas (em km)
+  centroids_reduzidos <- setores_reduzidos$centroid
+  dist_matrix <- st_distance(centroids_reduzidos, centroids_reduzidos) / 1000
+  dist_matrix <- drop_units(dist_matrix)
+  
+  # Criar matriz de cobertura (1 se dentro do raio, 0 caso contrário)
+  matrix_cobertura <- ifelse(dist_matrix <= R_max_km, 1, 0)
+  
+  n <- nrow(setores_reduzidos)
+  
+  # Função objetivo: minimizar o número de postos
+  obj <- rep(1, n)
+  
+  # Restrição: cada setor deve ser coberto por pelo menos um posto
+  A <- matrix_cobertura
+  b <- rep(1, n)
+  dir <- rep(">=", n)
+  
+  # Resolver o problema
+  resultado <- lp("min", obj, A, dir, b, all.bin = TRUE)
+  
+  if (resultado$status == 0) {
+    cat("Solução encontrada com sucesso!\n")
+    
+    # Armazenar os setores selecionados
+    solucao <- resultado$solution
+    postos_selecionados <- which(solucao == 1)
+    setores_selecionados <- setores_reduzidos$name_neighborhood[postos_selecionados]
+    
+    cat("Os postos devem ser instalados nos setores:\n")
+    print(setores_selecionados)
+    
+    # Marcar setores selecionados
+    setores_reduzidos$selected <- ifelse(1:nrow(setores_reduzidos) %in% postos_selecionados, "Selected", "Not Selected")
+    
+    # Imprimir matriz de cobertura
+    cat("\nMatriz de Cobertura:\n")
+    print(matrix_cobertura)
+    
+    # Plotar o resultado
+    ggplot() +
+      geom_sf(data = setores_urbanos, fill = "lightgrey", color = "black") +
+      geom_sf(data = setores_reduzidos, aes(fill = selected), color = "black", size = 1.2) +
+      scale_fill_manual(values = c("Selected" = "yellow", "Not Selected" = "lightgrey")) +
+      labs(title = "🗺️ Cobertura dos Postos de Saúde",
+           fill = "Status") +
+      theme_minimal()
+    
+  } else {
+    cat("Não foi possível encontrar uma solução.\n")
+  }
+}
+
+# Testar a função
+resolver_matrix_cobertura_conjuntos(R_max_km = 2, p = 2)

@@ -1,0 +1,48 @@
+library(lpSolve)
+library(geobr)
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(stats)
+
+# Baixar setores censitários de Itacoatiara-AM (código IBGE: 1301902)
+setores <- read_census_tract(code_tract = 1301902, year = 2010)
+
+# Filtrar apenas setores urbanos
+setores_urbanos <- setores %>%
+  filter(zone == "URBANO", !is.na(name_neighborhood))
+
+# Verificar se há setores suficientes
+if (nrow(setores_urbanos) < 5) {
+  stop("Número insuficiente de setores urbanos para selecionar postos.")
+}
+
+# Calcular centroides
+setores_urbanos$centroid <- st_centroid(setores_urbanos$geom)
+coords_matrix <- st_coordinates(setores_urbanos$centroid)
+
+# Aplicar K-means
+set.seed(42)
+p <- 5  # Número de postos
+clusters <- kmeans(coords_matrix, centers = p, nstart = 25)
+setores_urbanos$cluster <- as.factor(clusters$cluster)
+
+# Selecionar um setor representativo de cada cluster
+postos_selecionados <- setores_urbanos %>%
+  group_by(cluster) %>%
+  slice_min(order_by = st_distance(centroid, st_centroid(st_union(geom)))) %>%
+  ungroup()
+
+# Imprimir os setores e bairros escolhidos
+postos_selecionados %>%
+  select(name_neighborhood, code_tract, cluster) %>%
+  print()
+
+# Mapa com os postos
+ggplot() +
+  geom_sf(data = setores_urbanos, fill = "lightgrey", color = "black") +
+  geom_sf(data = postos_selecionados, aes(fill = cluster), color = "black") +
+  scale_fill_viridis_d() +
+  labs(title = "Postos de Saúde em Itacoatiara-AM (p-Centro)",
+       fill = "Cluster") +
+  theme_minimal()

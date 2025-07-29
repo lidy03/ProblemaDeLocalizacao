@@ -1,0 +1,101 @@
+library(lpSolve)
+library(geobr)
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+# Carregar os setores censitários de Itacoatiara-AM
+setores <- read_census_tract(code_tract = 1301902, year = 2010)
+
+# Filtrar apenas setores urbanos
+setores_urbanos <- setores %>%
+  filter(zone == "URBANO", !is.na(name_neighborhood))
+
+# Verificar se há setores suficientes
+if (nrow(setores_urbanos) < 3) {
+  stop("Número insuficiente de setores urbanos para selecionar postos.")
+}
+
+# Obter centroides dos setores censitários
+setores_urbanos$centroid <- st_centroid(setores_urbanos$geom)
+coords_matrix <- st_coordinates(setores_urbanos$centroid)
+
+# Aplicar K-means para reduzir o problema
+set.seed(42)
+p <- 5  # Número de postos
+clusters <- kmeans(coords_matrix, centers = p, nstart = 25)
+setores_urbanos$cluster <- as.factor(clusters$cluster)
+
+# Selecionar um setor representativo de cada cluster
+setores_reduzidos <- setores_urbanos %>%
+  group_by(cluster) %>%
+  slice_min(order_by = st_distance(centroid, st_centroid(st_union(geom)))) %>%
+  ungroup()
+
+# Obter matriz de distâncias dos setores reduzidos
+coords_reduzidos <- st_centroid(setores_reduzidos$geom)
+coords_matrix_reduzidos <- st_coordinates(coords_reduzidos)
+dist_matrix <- as.matrix(dist(coords_matrix_reduzidos))
+
+n <- nrow(setores_reduzidos)  # Número de setores reduzidos
+
+# Função objetivo (minimizar distância)
+obj <- c(as.vector(dist_matrix), rep(0, n))
+
+# Restrições de atendimento
+A1 <- matrix(0, n, n * n + n)
+for (i in 1:n) {
+  A1[i, ((i - 1) * n + 1):(i * n)] <- 1
+}
+b1 <- rep(1, n)
+
+# Restrições de cobertura
+A2 <- matrix(0, n * n, n * n + n)
+for (i in 1:n) {
+  for (j in 1:n) {
+    idx <- (i - 1) * n + j
+    A2[idx, idx] <- 1
+    A2[idx, n * n + j] <- -1
+  }
+}
+b2 <- rep(0, n * n)
+
+# Restrição: Exatamente p postos devem ser instalados
+A3 <- matrix(0, 1, n * n + n)
+A3[1, (n * n + 1):(n * n + n)] <- 1
+b3 <- p
+
+# Combina as restrições
+A <- rbind(A1, A2, A3)
+dir <- c(rep("=", n), rep("<=", n * n), "=")
+b <- c(b1, b2, b3)
+
+# Resolver o problema
+resultado <- lp("min", obj, A, dir, b, all.bin = TRUE)
+
+if (resultado$status == 0) {
+  cat("Solução encontrada\n")
+  solucao <- resultado$solution
+  y <- solucao[(n * n + 1):(n * n + n)]
+  postos_selecionados <- which(y == 1)
+  setores_selecionados <- setores_reduzidos$name_neighborhood[postos_selecionados]
+  cat("Os postos devem ser instalados nos seguintes setores:\n")
+  print(setores_selecionados)
+  
+  # Marcar setores selecionados
+  setores_reduzidos$selected <- ifelse(1:nrow(setores_reduzidos) %in% postos_selecionados, "Selected", "Not Selected")
+  
+  # Plotar o resultado
+  ggplot() +
+    geom_sf(data = setores_urbanos, fill = "lightgrey", color = "black") +
+    geom_sf(data = setores_reduzidos, aes(fill = selected), color = "black") +
+    scale_fill_manual(values = c("Selected" = "blue", "Not Selected" = "lightgrey")) +
+    labs(title = "Localização dos Postos de Saúde (p-Mediana com K-means)",
+         fill = "Status") +
+    theme_minimal()
+} else {
+  cat("Não foi possível encontrar uma solução possível\n")
+}
+
+colnames(itacoatiara_ubs)
+

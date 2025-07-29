@@ -1,0 +1,536 @@
+---
+output:
+  html_document:
+    css: "estilo.css"
+    includes:
+      in_header: "headers.html"
+---
+## Sobre Este Projeto
+
+Este projeto é uma pesquisa de iniciação cientifica realizada por integrantes do grupo de pesquisa NUPEC/LAMAPP da Universidade Federal do Amazonas. A pesquisa tem como objetivo principal explorar a aplicação de modelos de otimização para problemas de localização e definir os melhores pontos de instalação de Unidades Básicas de Saúde na cidade de Itacoatiara, AM.
+
+## Sobre os autores
+
+**Lidy Santos - Orientanda**
+
+Estudante de Engenharia de Software na Universidade Federal do Amazonas.
+
+Contato: lidy.santos@ufam.edu.br
+
+**Hidelbrando Rodrigues - Orientador**
+
+Docente na Universidade Federal do Amazonas
+
+Contato: hidelbrando.rodrigues@ufam.edu.br
+
+# Introdução
+
+O problema de Localização de Instalações faz parte da classe de problemas de Programação Linear Inteira Mista (PLIM), conhecidos como **Location/Allocation Problems**.
+
+De acordo com Laporte et al (2019), os problemas de localização visam definir os melhores pontos de instalação para atender a uma determinada demanda. A relevância desse conceito se sustenta na vantagem estratégica que uma boa localização pode fornecer para um fornecedor de serviços ao facilitar o alcance ao público alvo.
+
+Destaca-se ainda, que de acordo com Mousazadeh et al.(2018) estabelecer maior acessibilidade aos serviços de saúde exige a tomada de decisões estratégicas quanto à expansão, fechamento e a localização de instalações.Assim, observa-se que a expansão de  redes e estabelecimento de novas UBS deve estar alinhados aos locais de abertura.
+
+A partir disso, considera-se que a otimização pode se adaptar e apresentar inúmeros insights e resultados baseados nos requisitos e prioridades para a instalação de uma UBS. Neste trabalho, no entanto, a distância entre paciente e facilidade será considerado como principal critério de otimização e escolha de pontos ótimos.
+
+As UBS da área urbana de Itacoatiara foram identificadas a partir do Plano Municipal de Saúde de Itacoatiara (PMS) e estão apresentadas nos resultados como “Localização UBS Atual”. As localizações atuais foram utilizadas para comparação em relação aos pontos ótimos selecionados pelos modelos, aqui identificados como “Localização Ótima”. Casos em que uma localização já possuía UBS, mas também foi selecionada como um ponto ótimo, foram identificados como uma situação “Atual/Ótima”. Os bairros de Itacoatiara e ID’s relacionados, para melhor compreensão dos resultados, são apresentados na tabela a seguir.
+
+## Legenda dos Bairros de Itacoatiara
+
+| ID | Bairro             | Cod_Bairro_IBGE |
+|----|--------------------|-----------------|
+| 1  | Araújo Costa       | 1301902010      |
+| 2  | Centenário         | 1301902025      |
+| 3  | Centro             | 1301902001      |
+| 4  | Colônia            | 1301902002      |
+| 5  | Da Paz             | 1301902016      |
+| 6  | Eduardo Braga I    | 1301902017      |
+| 7  | Eduardo Braga II   | 1301902018      |
+| 8  | Florestal          | 1301902015      |
+| 9  | Iraci              | 1301902006      |
+| 10 | Jacarezinho        | 1301902027      |
+| 11 | Jardim Adriana     | 1301902021      |
+| 12 | Jardim Lorena      | 1301902024      |
+| 13 | Jauari II          | 1301902020      |
+| 14 | Mamoud Amed        | 1301902019      |
+| 15 | Mutirão            | 1301902022      |
+| 16 | Nogueira Junior    | 1301902023      |
+| 17 | Pedreiras          | 1301902005      |
+| 18 | Poranga            | 1301902026      |
+| 19 | Prainha            | 1301902004      |
+| 20 | Santa Luzia        | 1301902007      |
+| 21 | Santo Antônio      | 1301902009      |
+| 22 | São Cristóvão      | 1301902011      |
+| 23 | São Francisco      | 1301902012      |
+| 24 | São Jorge          | 1301902008      |
+| 25 | Tiradentes         | 1301902013      |
+| 26 | Jauari             | 1301902003      |
+
+Para melhor fluídez na apresentação dos códigos, a seguir destaca-se a configuração global que é aplicada no desenvolvimento de todos os modelos. Refere-se a chamada das bibliotecas utilizadas, dados dos bairros e dados de UBS. 
+
+```{r global-data, echo=TRUE, message=FALSE, warning=FALSE}
+library(lpSolve)
+library(geobr)
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(units)
+
+# --- Dados de Bairros (para a Legenda e Modelos) ---
+bairros <- read_neighborhood(year = 2022)
+bairros_itacoatiara_all <- bairros %>%
+  filter(code_muni == 1301902) %>%
+  select(code_neighborhood, name_neighborhood, geom) %>%
+  mutate(label_id = row_number())
+
+if (nrow(bairros_itacoatiara_all) == 0) {
+  stop("Não foram encontrados bairros para Itacoatiara-AM. Verifique o filtro 'code_muni'.")
+}
+
+ubs_nomes <- c(
+  "UNIDADE BASICA DE SAUDE MANOEL MENDES DA SILVA",
+  "UNIDADE BASICA DE SAUDE JOSE RESK MAKLOUF",
+  "UNIDADE BASICA DE SAUDE NICOLAS EUTHEMES LEKAKIS NETO",
+  "UNIDADE BASICA DE SAUDE SANTO ANTONIO",
+  "UNIDADE BASICA DE SAUDE PAULO GOMES DA SILVA",
+  "UNIDADE BASICA DE SAUDE BERNARDINO DESSIMONI",
+  "UNIDADE PRISIONAL DE ITACOATIARA"
+)
+
+servicos_saude_brasil_all <- read_health_facilities() %>%
+  st_as_sf()
+
+servicos_saude_filtered <- servicos_saude_brasil_all %>%
+  filter(
+    abbrev_state == "AM",
+    code_muni == 1301902,
+    no_fantasia %in% ubs_nomes
+  ) %>%
+  rename(name = no_fantasia) %>%
+  select(name, no_bairro, geom)
+
+if (nrow(servicos_saude_filtered) == 0) {
+  warning("Nenhuma UBS encontrada com os nomes especificados em Itacoatiara-AM. Verifique os nomes ou o filtro.")
+}
+```
+
+# Resultados obtidos
+
+## P-centro
+
+O modelo p-centro tem como principal objetivo minimizar a maior distância entre paciente e a instalação. Este modelo assegura que a distância máxima percorrida para chegar à instalação seja a menor possível e considera restrições baseadas nos critérios de otimização, observadas na formulação matemática a seguir proposta por Losso et al. (2018).
+
+$$
+\begin{aligned}
+\text{Minimizar} \quad & w = d_{\max} \\
+\text{Sujeito a:} \\
+& \sum_{j} y_{ij} = 1 \quad i = 1, 2, ..., n \\
+& \sum_{j} x_j = p \quad i = 1, 2, ..., n \\
+& y_{ij} \leq x_{ij} \quad \text{Para todo } i \text{ e } j \\
+& w \geq \sum_{j} d_{ij} y_{ij} \\
+& x_j \in \{0, 1\} \\
+& y_{ij} \in \{0, 1\}
+\end{aligned}
+$$
+Nesta formulação dmax é a distância entre a demanda e a facilidade; dij é a é a matriz de distâncias; p é o número de instalações que se deseja alocar; xj é a variável binária que indica a participação na solução; Yij deve ser igual a 1 caso a demanda seja atendida por uma instalação e 0 caso contrário.
+
+A seguir observa-se o código baseado em p-centro,desenvolvido em linguagem R,para definir melhores pontos de instalação de serviços de saúde.
+
+```{r p-centro, warning=FALSE, message=FALSE, echo=TRUE, collapse=TRUE}
+bairros_itacoatiara <- bairros_itacoatiara_all 
+servicos_saude <- servicos_saude_filtered 
+
+# Definir o número de centros a serem selecionados
+p <- 7 
+
+# Calcular as coordenadas dos centroides dos bairros e a matriz de distâncias
+centroids <- st_centroid(bairros_itacoatiara$geom)
+coords_matrix <- st_coordinates(centroids)
+
+if (any(is.na(coords_matrix)) || any(is.infinite(coords_matrix))) {
+  stop("Coordenadas dos centroides contêm valores inválidos (NA/Inf). Verifique 'st_centroid'.")
+}
+
+dist_matrix <- as.matrix(dist(coords_matrix))
+
+# Parâmetros do problema p-centro
+n <- nrow(bairros_itacoatiara)
+
+if (n == 0) {
+  stop("Número de bairros é zero. Não é possível executar o modelo p-centro.")
+}
+
+# Implementar o modelo p-centro
+
+num_vars <- n * n + n + 1
+
+# Função objetivo: minimizar w 
+obj <- c(rep(0, n * n), 
+          rep(0, n),   
+          1)           
+
+# 1. Restrição: Cada demanda i deve ser atendida por exatamente um centro j (Sum_j y_ij = 1)
+# n restrições
+A1 <- matrix(0, nrow = n, ncol = num_vars)
+b1 <- rep(1, n)
+dir1 <- rep("=", n)
+for (i in 1:n) {
+  A1[i, ((i - 1) * n + 1):(i * n)] <- 1 # Y_i1, Y_i2, ..., Y_in
+}
+
+# 2. Restrição: Exatamente 'p' centros devem ser selecionados (Sum_j x_j = p)
+# 1 restrição
+A2 <- matrix(0, nrow = 1, ncol = num_vars)
+b2 <- p
+dir2 <- "="
+A2[1, (n * n + 1):(n * n + n)] <- 1 # X_1, X_2, ..., X_n
+
+# 3. Restrição: y_ij <= x_j (Se i é atendido por j, então j deve ser um centro)
+# n*n restrições
+A3 <- matrix(0, nrow = n * n, ncol = num_vars)
+b3 <- rep(0, n * n)
+dir3 <- rep("<=", n * n)
+for (i in 1:n) {
+  for (j in 1:n) {
+    row_idx <- (i - 1) * n + j 
+    col_idx_y_ij <- (i - 1) * n + j 
+    col_idx_x_j <- n * n + j
+    
+    A3[row_idx, col_idx_y_ij] <- 1
+    A3[row_idx, col_idx_x_j] <- -1
+  }
+}
+
+# 4. Restrição: d_ij * y_ij <= w para todo i, j (a distância para cada demanda atendida não pode exceder w)
+A4 <- matrix(0, nrow = n * n, ncol = num_vars) 
+b4 <- rep(0, n * n)
+dir4 <- rep("<=", n * n)
+for (i in 1:n) {
+  for (j in 1:n) {
+    row_idx <- (i - 1) * n + j
+    col_idx_y_ij <- (i - 1) * n + j
+    col_idx_w <- num_vars 
+    
+    A4[row_idx, col_idx_y_ij] <- dist_matrix[i, j] 
+    A4[row_idx, col_idx_w] <- -1            
+  }
+}
+
+# Combinar todas as matrizes de restrição e vetores
+A <- rbind(A1, A2, A3, A4)
+b <- c(b1, b2, b3, b4)
+dir <- c(dir1, dir2, dir3, dir4)
+
+# Verificar se as dimensões estão corretas
+if (ncol(A) != num_vars || nrow(A) != length(b) || nrow(A) != length(dir)) {
+  stop("Erro de dimensão nas matrizes de restrição. Verifique a construção de A, b, dir.")
+}
+
+# Resolver o problema de otimização
+indices_bin <- 1:(n * n + n)
+resultado_p_centro <- lp("min", obj, A, dir, b, int.vec = indices_bin)
+
+# Processar e mapear os resultados
+bairros_itacoatiara <- bairros_itacoatiara %>%
+  mutate(p_centro_selected = "Não Selecionado")
+
+if (resultado_p_centro$status == 0) {
+  solucao_p_centro <- resultado_p_centro$solution
+  
+  distancia_max_cobertura_otima <- solucao_p_centro[num_vars]
+  
+  postos_otimos_indices_centro <- which(solucao_p_centro[(n * n + 1):(n * n + n)] == 1)
+  
+  if (length(postos_otimos_indices_centro) > 0) {
+    bairros_otimos_centro <- bairros_itacoatiara$name_neighborhood[postos_otimos_indices_centro]
+     cat("Os locais ótimos (p-centro) são nos bairros:\n", paste(bairros_otimos_centro, collapse = ", "), "\n")
+    bairros_itacoatiara$p_centro_selected[postos_otimos_indices_centro] <- "Selecionado (Ótimo)"
+  } else {
+     cat("Nenhum bairro foi selecionado pelo modelo p-centro, verificar erros.\n")
+  }
+  
+} else {
+  # cat("Não foi possível encontrar uma solução ótima para o p-centro. Status:", resultado_p_centro$status, "\n")
+  if (resultado_p_centro$status == 2) {
+    # cat("]O problema não tem solução. Verifique as restrições e o valor de 'p'.\n") 
+  }
+}
+
+# Realizar a junção espacial para associar serviços de saúde aos bairros
+servicos_saude_bairros_spatial <- st_join(servicos_saude_filtered, bairros_itacoatiara, join = st_within, left = FALSE) %>%
+  select(name, label_id)
+
+bairros_com_servicos <- servicos_saude_bairros_spatial %>%
+  distinct(label_id) %>%
+  pull(label_id)
+
+# Classificar os bairros para mapeamento
+bairros_itacoatiara <- bairros_itacoatiara %>%
+  mutate(
+    tem_posto_existente = ifelse(label_id %in% bairros_com_servicos, "Existente", "Não Existente"),
+    category = case_when(
+      p_centro_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Existente" ~ "Atual/Ótima",
+      p_centro_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Não Existente" ~ "Localização Ótima",
+      tem_posto_existente == "Existente" & p_centro_selected == "Não Selecionado" ~ "Localização UBS Atual",
+      TRUE ~ "Nenhum"
+    )
+  )
+
+# Definir cores para o mapa
+cores_mapa <- c(
+  "Atual/Ótima" = "purple",
+  "Localização Ótima" = "blue",
+  "Localização UBS Atual" = "green",
+  "Nenhum" = "lightgrey" # Cor para bairros sem nenhum status
+)
+
+# Gerar o mapa
+mapa_bairros_numerados_colorido <- ggplot() +
+  geom_sf(data = bairros_itacoatiara, aes(fill = category), color = "black", linewidth = 0.2) +
+  geom_sf_text(data = bairros_itacoatiara, 
+               aes(label = label_id, geometry = st_centroid(geom)),
+               size = 2, color = "black", check_overlap = TRUE, fontface = "bold") +
+  scale_fill_manual(values = cores_mapa, name = "Legenda") +
+  labs(
+    title = "Localização de Pontos Ótimos (p-Centro) vs. UBS Existentes em Itacoatiara",
+    subtitle = paste0("Distância Máxima Minimizada (w): ", round(distancia_max_cobertura_otima, 2), " unidades")
+  ) +
+  theme_minimal()
+
+print(mapa_bairros_numerados_colorido)
+```
+
+Após a implementação desse modelo, os bairros selecionados como localizações ótimas pelo modelo p-centro foram: Centenário (2), Centro (3), Da Paz (5), Florestal (8), Iraci (9), Jacarezinho (10)  e Poranga (18). Apresenta-se abaixo a imagem com o mapa resultado.
+
+Observa-se que de acordo com a abordagem do modelo, apenas uma UBS dentre as que existem atualmente está localizada em um ponto considerado ótimo, o (3) Centro. Logo, para uma distribuição que priorize a menor distância entre paciente e UBS seria necessário uma reorganização para as demais unidades.
+
+## P-mediana
+
+A p-mediana busca minimizar a soma ponderada das distancias entre demanda e instalação, aqui, deve-se garantir que a distancia média para todos os pacientes seja a menor possível. A seguir apresenta-se a formulação matemática da p-mediana de acordo com Pizzolato et al.(2012).
+
+$$
+\begin{aligned}
+\text{Min } Z = & \sum_{i \in N} \sum_{j \in N} w_i d_{ij} x_{ij} \\
+\text{Sujeito a:} \\
+& \sum_{j \in N} x_{ij} = 1; \quad i \in N \\
+& \sum_{j \in N} x_{jj} = p \\
+& x_{ij} \leq x_{jj}; \quad i \in N, j \in N \\
+& x_{ij} \in \{0, 1\}; \quad i, j \in N
+\end{aligned}
+$$
+
+Nesta formulação, a função objetivo (1) representa a minimização das distâncias ponderadas entre os pacientes e instalações; a restrição (2) indica que cada paciente i é alocado a somente uma instalação j; a restrição (3) mostra a instalação que possui um determinado serviço, a restrição (4) garante que um paciente deve ser atendido apenas num local que possui instalação e a restrição (5) representam as variáveis de decisão binárias.
+
+A seguir observa-se o código baseado em p-mediana,desenvolvido em linguagem R,para definir melhores pontos de instalação de serviços de saúde e comparar com a localização de UBS existentes.
+
+```{r p-mediana, warning=FALSE, message=FALSE, echo=TRUE, collapse=TRUE}
+bairros_itacoatiara <- bairros_itacoatiara_all
+servicos_saude <- servicos_saude_filtered
+
+# Calcular a matriz de distâncias entre os centroides dos bairros
+centroides <- st_centroid(bairros_itacoatiara$geom)
+dist_matrix <- as.matrix(dist(st_coordinates(centroides)))
+n <- nrow(bairros_itacoatiara)
+p <- 7
+
+# Implementar o modelo
+obj <- c(as.vector(dist_matrix), rep(0, n))
+A1 <- matrix(0, n, n * n + n)
+for (i in 1:n) {
+  A1[i, ((i - 1) * n + 1):(i * n)] <- 1
+}
+b1 <- rep(1, n)
+A2 <- matrix(0, n * n, n * n + n)
+for (i in 1:n) {
+  for (j in 1:n) {
+    idx <- (i - 1) * n + j
+    A2[idx, idx] <- 1
+    A2[idx, n * n + j] <- -1
+  }
+}
+b2 <- rep(0, n * n)
+A3 <- matrix(0, 1, n * n + n)
+A3[1, (n * n + 1):(n * n + n)] <- 1
+b3 <- p
+A <- rbind(A1, A2, A3)
+dir <- c(rep("=", n), rep("<=", n * n), "=")
+b <- c(b1, b2, b3)
+resultado_p_mediana <- lp("min", obj, A, dir, b, all.bin = TRUE)
+
+# Inicializar coluna de seleção ótima
+bairros_itacoatiara <- bairros_itacoatiara %>%
+  mutate(p_mediana_selected = "Não Selecionado")
+
+if (resultado_p_mediana$status == 0) {
+  cat("Solução p-mediana encontrada!\n")
+  solucao_p_mediana <- resultado_p_mediana$solution[(n * n + 1):(n * n + n)]
+  postos_otimos_indices <- which(solucao_p_mediana == 1)
+  bairros_otimos <- bairros_itacoatiara$name_neighborhood[postos_otimos_indices]
+  cat("Os locais ótimos (p-mediana) são nos bairros:\n", paste(bairros_otimos, collapse = ", "), "\n")
+  bairros_itacoatiara$p_mediana_selected[postos_otimos_indices] <- "Selecionado (Ótimo)"
+} else {
+  cat("Não foi possível encontrar uma solução ótima para o p-mediana.\n")
+}
+
+# Realizar a junção espacial para associar serviços de saúde aos bairros
+servicos_saude_bairros_spatial <- st_join(servicos_saude, bairros_itacoatiara, join = st_within, left = FALSE) %>%
+  select(name, label_id)
+
+bairros_com_servicos <- servicos_saude_bairros_spatial %>%
+  distinct(label_id) %>%
+  pull(label_id)
+
+bairros_itacoatiara <- bairros_itacoatiara %>%
+  mutate(
+    tem_posto_existente = ifelse(label_id %in% bairros_com_servicos, "Existente", "Não Existente"),
+    category = case_when(
+      p_mediana_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Existente" ~ "Atual/Ótima",
+      p_mediana_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Não Existente" ~ "Localização ótima",
+      tem_posto_existente == "Existente" & p_mediana_selected == "Não Selecionado" ~ "Localização UBS atual",
+      TRUE ~ "Nenhum"
+    )
+  )
+
+cores_mapa <- c(
+  "Ótimo e Existente" = "purple",
+  "Apenas Ótimo" = "blue",
+  "Apenas Existente" = "green",
+  "Nenhum" = "white"
+)
+
+mapa_bairros_numerados_colorido <- ggplot() +
+  geom_sf(data = bairros_itacoatiara, aes(fill = category), color = "black") +
+  geom_sf_text(data = bairros_itacoatiara, aes(label = label_id, geometry = st_centroid(geom)), size = 2, color = "black", check_overlap = TRUE, fontface = "bold") +
+  scale_fill_manual(values = cores_mapa, name = "Legenda") +
+  labs(
+    title = "Localização de Pontos Ótimos (p-mediana) vs. Serviços de Saúde em Itacoatiara",
+    subtitle = "Bairros preenchidos pela categoria"
+  ) +
+  theme_minimal()
+
+print(mapa_bairros_numerados_colorido)
+
+```
+
+Para a p-mediana, os bairros que representam pontos ótimos para a localização das 7 UBS1s são: Araújo Costa (1), Colonia (4), Eduardo Braga II (7), Jacarezinho (10), Jardim Lorena (12), Mutirão (15)  e Poranga (18). Abaixo, apresenta-se a imagem do resultado com os respectivos identificadores dos bairros.
+
+Neste caso, o cenário muda de forma considerável em relação ao resultado pelo p-centro. Aqui, encontram-se duas unidades bem posicionadas nos bairros Colonia (4) e Araújo Costa (1), o que representa uma distribuição ligeiramente melhor quando analisada a distância ponderada percorrida pela população para acessar uma UBS.
+
+## Cobertura de conjuntos
+
+A cobertura de conjuntos se baseia na determinação de um raio de cobertura. O propósito desse modelo se encontra na minimização de instalações de forma que o máximo de pacientes seja coberto pela área definida. Na formula abaixo é exibido a representação matemática da cobertura de conjuntos apresentada por Toregas et al. (1971).
+
+$$
+\begin{aligned}
+\text{Minimizar } z = & \sum_{j=1}^{n} x_j \\
+\text{s.a.} \quad & \sum_{j \in N_i} x_j \geq 1 \quad (i = 1, 2, ..., n) \\
+& x_j \in \{0,1\} \quad (j = 1, 2, ..., n)
+\end{aligned}
+$$
+Nesta formulação, o objetivo é minimizar o número de instalações de UBS de forma que todas as demandas sejam atendidas dentro de um critério de cobertura, neste caso o raio de cobertura. A função objetivo representa a minimização da quantidade de UBS criadas; a restrição (1) garante que cada ponto de demanda seja coberto, por no mínimo, uma UBS e a restrição (3) define que a variável de decisão é binária.
+
+
+A seguir observa-se o código baseado em cobertura de conjuntos,desenvolvido em linguagem R,para definir melhores pontos de instalação de serviços de saúde.
+
+```{r cobertura de conjuntos, warning=FALSE, message=FALSE, echo=TRUE, collapse=TRUE}
+bairros_itacoatiara <- bairros_itacoatiara_all
+servicos_saude <- servicos_saude_filtered
+
+# Definir o raio máximo de cobertura (em KM)
+R_max_km <- 2 #Ajustar se necessário
+cat("Raio máximo de cobertura (R_max_km):", R_max_km, "km\n")
+
+# Calcular a matriz de distâncias entre os centroides dos bairros
+centroids <- st_centroid(bairros_itacoatiara$geom)
+dist_matrix <- st_distance(centroids, centroids)
+dist_matrix_km <- drop_units(dist_matrix) / 1000
+
+# Implementar o modelo de Cobertura de Conjuntos
+n <- nrow(bairros_itacoatiara)
+obj <- rep(1, n)
+matrix_cobertura <- ifelse(dist_matrix_km <= R_max_km, 1, 0)
+
+# Restrições: Cada bairro deve ser coberto por pelo menos um posto
+A <- matrix_cobertura
+b <- rep(1, n)
+dir <- rep(">=", n)
+
+# Resolver o problema de otimização
+cat("Tentando resolver o problema de Cobertura de Conjuntos com lpSolve...\n")
+resultado_cobertura <- lp("min", obj, A, dir, b, all.bin = TRUE)
+cat("lpSolve finalizado. Verificando o status...\n")
+
+# Processar e mapear os resultados da Cobertura de Conjuntos
+bairros_itacoatiara <- bairros_itacoatiara %>%
+  mutate(cobertura_selected = "Não Selecionado")
+
+if (resultado_cobertura$status == 0) {
+  cat("Solução de Cobertura de Conjuntos encontrada!\n")
+  solucao_cobertura <- resultado_cobertura$solution
+  postos_otimos_indices_cobertura <- which(solucao_cobertura == 1)
+  bairros_otimos_cobertura_nomes <- bairros_itacoatiara$name_neighborhood[postos_otimos_indices_cobertura]
+  cat("Os locais ótimos (Cobertura de Conjuntos) são nos bairros:\n", paste(bairros_otimos_cobertura_nomes, collapse = ", "), "\n")
+  bairros_itacoatiara$cobertura_selected[postos_otimos_indices_cobertura] <- "Selecionado (Ótimo)"
+} else {
+  cat("Não foi possível encontrar uma solução ótima para Cobertura de Conjuntos. Status do solver:", resultado_cobertura$status, "\n")
+  cat(" - 2: O problema é inviável (i.e., com o R_max_km dado, alguns bairros não podem ser cobertos).\n")
+}
+
+# Realizar a junção espacial para associar serviços de saúde aos bairros
+servicos_saude_bairros_spatial <- st_join(servicos_saude, bairros_itacoatiara, join = st_within, left = FALSE) %>%
+  select(name, label_id)
+
+bairros_com_servicos <- servicos_saude_bairros_spatial %>%
+  distinct(label_id) %>%
+  pull(label_id)
+
+# Classificar os bairros para mapeamento
+bairros_itacoatiara <- bairros_itacoatiara %>%
+  mutate(
+    tem_posto_existente = ifelse(label_id %in% bairros_com_servicos, "Existente", "Não Existente"),
+    category = case_when( 
+      cobertura_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Existente" ~ "Atual/Ótima",
+      cobertura_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Não Existente" ~ "Localização Ótima",
+      tem_posto_existente == "Existente" & cobertura_selected == "Não Selecionado" ~ "Localização UBS Atual",
+      TRUE ~ "Nenhum"
+    )
+  )
+
+# Definir cores para o mapa com as novas legendas
+cores_mapa <- c( 
+  "Atual/Ótima" = "purple",
+  "Localização Ótima" = "blue",
+  "Localização UBS Atual" = "green",
+  "Nenhum" = "lightgrey" # Cor para bairros sem nenhum status
+)
+
+# Gerar o mapa
+mapa_bairros_numerados_colorido <- ggplot() +
+  geom_sf(data = bairros_itacoatiara, aes(fill = category), color = "black", linewidth = 0.2) +
+  geom_sf_text(data = bairros_itacoatiara, 
+               aes(label = label_id, geometry = st_centroid(geom)),
+               size = 2, color = "black", check_overlap = TRUE, fontface = "bold") +
+  scale_fill_manual(values = cores_mapa, name = "Legenda") +
+  labs(
+    title = paste0("Localização de Pontos Ótimos (Cobertura - ", R_max_km, "km) vs. UBS Selecionadas em Itacoatiara"),
+    subtitle = "Bairros preenchidos pela categoria"
+  ) +
+  theme_minimal()
+
+print(mapa_bairros_numerados_colorido)
+```
+
+Para a cobertura de conjuntos, as melhores localizações visando a minimizar a quantidade de UBS enquanto cobre o máximo de demanda dentro de um determinado raio foram: Araújo Costa (1), Colonia (4), Eduardo Braga I (6)  e Jacarezinho (10). O raio adotado para este exemplo foi 2 km,  resultados diferentes podem ser adquiridos conforme a adaptação do raio de cobertura.
+
+O modelo apresentou semelhanças com a p-mediana nos resultados. Para um raio de 2 km, foram escolhidos 4 pontos ótimos, entre eles mais uma vez os bairros Araújo Costa (1) e Colônia (4), que já possuem UBS. Isto evidencia que, entre as 7 existentes, apenas duas unidades estão bem localizadas.
+
+# Conclusão
+Portanto, compreende-se que a localização se apresenta como um fator de alta relevância para a abertura de Unidades Básicas de Saúde. O custo de deslocamento da população para receber atendimentos se torna determinante e representa um fator essencial para o desenvolvimento da rede nacional de saúde pública, pois reflete em diferentes aspectos sociais e econômicos.
+
+Por meio dos modelos de otimização p-mediana, p-centro e cobertura de conjuntos, o objetivo deste estudo foi concluído com sucesso. A análise revelou uma grande diferença entre as localizações atuais das UBS e os pontos ótimos escolhidos pelos modelos: apenas 1 das 7 UBS encontram-se bem localizada para o p-centro enquanto apenas 2 das 7, para p-mediana e cobertura de conjuntos. Isto infere que existe a necessidade de reorganização estratégica da infraestrutura local.
+
+A implementação dos modelos demonstrou o potencial da otimização para valorizar a distribuição dos serviços de saúde. Dessa forma, se torna possível maximizar a acessibilidade geográfica para a população, assim como democratizar o acesso aos cuidados primários, pois ao minimizar distâncias e otimizar cobertura, a promoção de utilização de recursos públicos e atendimento de demandas se faz cada vez mais eficiente. 
+
+Como limitação, este trabalho utilizou a distância como único critério para determinação de pontos ótimos. Para trabalhos futuros, é possível uma expansão da análise de forma a incorporar outros aspectos como recursos e profissionais disponíveis, além de densidade demográfica, entre outros. Assim, outras informações cruciais poderiam contribuir para um melhor planejamento da rede de saúde pública regional.
+
+

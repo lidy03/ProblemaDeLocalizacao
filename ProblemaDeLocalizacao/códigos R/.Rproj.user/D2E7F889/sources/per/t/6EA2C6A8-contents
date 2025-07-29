@@ -1,0 +1,70 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #ffffff;
+}
+
+.container {
+    max-width: 500px;
+    margin: auto;
+    padding: 20px;
+}
+
+/* Estilizando a Navbar */
+.navbar {
+    background-color: #007bff;
+    padding: 10px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 50px; /* Ajuste a altura para um tamanho menor */
+}
+
+.navbar .logo {
+    font-size: 18px;
+    font-weight: bold;
+    color: white;
+}
+
+.navbar a {
+    color: white;
+    text-decoration: none;
+    padding: 8px 15px;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.navbar a:hover {
+    background-color: #0056b3;
+    border-radius: 5px;
+}
+
+/* Ajuste para evitar que a navbar ocupe espaço extra */
+header {
+    height: auto;
+    margin-bottom: 20px;
+}
+
+h1.title {
+    color: #0056b3;
+    font-size: 30px;
+    margin-left: 180px;
+}
+/* Ajustando os títulos */
+h1 {
+    color: #0056b3;
+    font-size: 2em;
+    margin-top: 10px;
+}
+
+h2 {
+    color: #0056b3;
+    font-size: 1em;
+}
+
+p {
+    font-size: 1.2em;
+    color: #444;
+    text-align: justify;
+}
