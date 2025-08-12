@@ -1,8 +1,0 @@
----
-output:
-  html_document:
-    css: estilo.css
-    include:
-      before_body: headers.html
----
-

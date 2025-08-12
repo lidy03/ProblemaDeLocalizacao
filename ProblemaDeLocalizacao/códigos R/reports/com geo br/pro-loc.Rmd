@@ -66,9 +66,9 @@ As UBS da área urbana de Itacoatiara foram identificadas a partir do Plano Muni
 | 25 | Tiradentes         | 1301902013      |
 | 26 | Jauari             | 1301902003      |
 
-Para melhor fluídez na apresentação dos códigos, a seguir destaca-se a configuração global que é aplicada no desenvolvimento de todos os modelos. Refere-se a chamada das bibliotecas utilizadas, dados dos bairros e dados de UBS. 
+Para melhor fluídez na apresentação dos códigos, a seguir destaca-se a configuração global que é aplicada no desenvolvimento de todos os modelos. Refere-se a chamada das bibliotecas utilizadas, dados dos bairros e dados de UBS.  
 
-```{r global-data, echo=TRUE, message=FALSE, warning=FALSE}
+```{r global-data, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
 library(lpSolve)
 library(geobr)
 library(sf)
@@ -137,6 +137,12 @@ Nesta formulação dmax é a distância entre a demanda e a facilidade; dij é a
 A seguir observa-se o código baseado em p-centro,desenvolvido em linguagem R,para definir melhores pontos de instalação de serviços de saúde.
 
 ```{r p-centro, warning=FALSE, message=FALSE, echo=TRUE, collapse=TRUE}
+library(lpSolve)
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(units)
+
 bairros_itacoatiara <- bairros_itacoatiara_all 
 servicos_saude <- servicos_saude_filtered 
 
@@ -161,39 +167,30 @@ if (n == 0) {
 }
 
 # Implementar o modelo p-centro
-
 num_vars <- n * n + n + 1
+obj <- c(rep(0, n * n),
+          rep(0, n),
+          1)
 
-# Função objetivo: minimizar w 
-obj <- c(rep(0, n * n), 
-          rep(0, n),   
-          1)           
-
-# 1. Restrição: Cada demanda i deve ser atendida por exatamente um centro j (Sum_j y_ij = 1)
-# n restrições
 A1 <- matrix(0, nrow = n, ncol = num_vars)
 b1 <- rep(1, n)
 dir1 <- rep("=", n)
 for (i in 1:n) {
-  A1[i, ((i - 1) * n + 1):(i * n)] <- 1 # Y_i1, Y_i2, ..., Y_in
+  A1[i, ((i - 1) * n + 1):(i * n)] <- 1
 }
 
-# 2. Restrição: Exatamente 'p' centros devem ser selecionados (Sum_j x_j = p)
-# 1 restrição
 A2 <- matrix(0, nrow = 1, ncol = num_vars)
 b2 <- p
 dir2 <- "="
-A2[1, (n * n + 1):(n * n + n)] <- 1 # X_1, X_2, ..., X_n
+A2[1, (n * n + 1):(n * n + n)] <- 1
 
-# 3. Restrição: y_ij <= x_j (Se i é atendido por j, então j deve ser um centro)
-# n*n restrições
 A3 <- matrix(0, nrow = n * n, ncol = num_vars)
 b3 <- rep(0, n * n)
 dir3 <- rep("<=", n * n)
 for (i in 1:n) {
   for (j in 1:n) {
-    row_idx <- (i - 1) * n + j 
-    col_idx_y_ij <- (i - 1) * n + j 
+    row_idx <- (i - 1) * n + j
+    col_idx_y_ij <- (i - 1) * n + j
     col_idx_x_j <- n * n + j
     
     A3[row_idx, col_idx_y_ij] <- 1
@@ -201,62 +198,44 @@ for (i in 1:n) {
   }
 }
 
-# 4. Restrição: d_ij * y_ij <= w para todo i, j (a distância para cada demanda atendida não pode exceder w)
-A4 <- matrix(0, nrow = n * n, ncol = num_vars) 
+A4 <- matrix(0, nrow = n * n, ncol = num_vars)
 b4 <- rep(0, n * n)
 dir4 <- rep("<=", n * n)
 for (i in 1:n) {
   for (j in 1:n) {
     row_idx <- (i - 1) * n + j
     col_idx_y_ij <- (i - 1) * n + j
-    col_idx_w <- num_vars 
+    col_idx_w <- num_vars
     
-    A4[row_idx, col_idx_y_ij] <- dist_matrix[i, j] 
-    A4[row_idx, col_idx_w] <- -1            
+    A4[row_idx, col_idx_y_ij] <- dist_matrix[i, j]
+    A4[row_idx, col_idx_w] <- -1
   }
 }
 
-# Combinar todas as matrizes de restrição e vetores
 A <- rbind(A1, A2, A3, A4)
 b <- c(b1, b2, b3, b4)
 dir <- c(dir1, dir2, dir3, dir4)
 
-# Verificar se as dimensões estão corretas
 if (ncol(A) != num_vars || nrow(A) != length(b) || nrow(A) != length(dir)) {
   stop("Erro de dimensão nas matrizes de restrição. Verifique a construção de A, b, dir.")
 }
 
-# Resolver o problema de otimização
 indices_bin <- 1:(n * n + n)
 resultado_p_centro <- lp("min", obj, A, dir, b, int.vec = indices_bin)
 
-# Processar e mapear os resultados
 bairros_itacoatiara <- bairros_itacoatiara %>%
   mutate(p_centro_selected = "Não Selecionado")
 
 if (resultado_p_centro$status == 0) {
   solucao_p_centro <- resultado_p_centro$solution
-  
   distancia_max_cobertura_otima <- solucao_p_centro[num_vars]
-  
   postos_otimos_indices_centro <- which(solucao_p_centro[(n * n + 1):(n * n + n)] == 1)
   
   if (length(postos_otimos_indices_centro) > 0) {
-    bairros_otimos_centro <- bairros_itacoatiara$name_neighborhood[postos_otimos_indices_centro]
-     cat("Os locais ótimos (p-centro) são nos bairros:\n", paste(bairros_otimos_centro, collapse = ", "), "\n")
     bairros_itacoatiara$p_centro_selected[postos_otimos_indices_centro] <- "Selecionado (Ótimo)"
-  } else {
-     cat("Nenhum bairro foi selecionado pelo modelo p-centro, verificar erros.\n")
-  }
-  
-} else {
-  # cat("Não foi possível encontrar uma solução ótima para o p-centro. Status:", resultado_p_centro$status, "\n")
-  if (resultado_p_centro$status == 2) {
-    # cat("]O problema não tem solução. Verifique as restrições e o valor de 'p'.\n") 
   }
 }
 
-# Realizar a junção espacial para associar serviços de saúde aos bairros
 servicos_saude_bairros_spatial <- st_join(servicos_saude_filtered, bairros_itacoatiara, join = st_within, left = FALSE) %>%
   select(name, label_id)
 
@@ -264,7 +243,6 @@ bairros_com_servicos <- servicos_saude_bairros_spatial %>%
   distinct(label_id) %>%
   pull(label_id)
 
-# Classificar os bairros para mapeamento
 bairros_itacoatiara <- bairros_itacoatiara %>%
   mutate(
     tem_posto_existente = ifelse(label_id %in% bairros_com_servicos, "Existente", "Não Existente"),
@@ -276,18 +254,16 @@ bairros_itacoatiara <- bairros_itacoatiara %>%
     )
   )
 
-# Definir cores para o mapa
 cores_mapa <- c(
   "Atual/Ótima" = "purple",
   "Localização Ótima" = "blue",
   "Localização UBS Atual" = "green",
-  "Nenhum" = "lightgrey" # Cor para bairros sem nenhum status
+  "Nenhum" = "lightgrey"
 )
 
-# Gerar o mapa
 mapa_bairros_numerados_colorido <- ggplot() +
   geom_sf(data = bairros_itacoatiara, aes(fill = category), color = "black", linewidth = 0.2) +
-  geom_sf_text(data = bairros_itacoatiara, 
+  geom_sf_text(data = bairros_itacoatiara,
                aes(label = label_id, geometry = st_centroid(geom)),
                size = 2, color = "black", check_overlap = TRUE, fontface = "bold") +
   scale_fill_manual(values = cores_mapa, name = "Legenda") +
@@ -323,7 +299,7 @@ Nesta formulação, a função objetivo (1) representa a minimização das dist�
 
 A seguir observa-se o código baseado em p-mediana,desenvolvido em linguagem R,para definir melhores pontos de instalação de serviços de saúde e comparar com a localização de UBS existentes.
 
-```{r p-mediana, warning=FALSE, message=FALSE, echo=TRUE, collapse=TRUE}
+```{r p-mediana, warning=FALSE, message=FALSE, echo=TRUE, collapse=TRUE, cache=TRUE}
 bairros_itacoatiara <- bairros_itacoatiara_all
 servicos_saude <- servicos_saude_filtered
 
@@ -362,7 +338,6 @@ bairros_itacoatiara <- bairros_itacoatiara %>%
   mutate(p_mediana_selected = "Não Selecionado")
 
 if (resultado_p_mediana$status == 0) {
-  cat("Solução p-mediana encontrada!\n")
   solucao_p_mediana <- resultado_p_mediana$solution[(n * n + 1):(n * n + n)]
   postos_otimos_indices <- which(solucao_p_mediana == 1)
   bairros_otimos <- bairros_itacoatiara$name_neighborhood[postos_otimos_indices]
@@ -385,21 +360,21 @@ bairros_itacoatiara <- bairros_itacoatiara %>%
     tem_posto_existente = ifelse(label_id %in% bairros_com_servicos, "Existente", "Não Existente"),
     category = case_when(
       p_mediana_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Existente" ~ "Atual/Ótima",
-      p_mediana_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Não Existente" ~ "Localização ótima",
-      tem_posto_existente == "Existente" & p_mediana_selected == "Não Selecionado" ~ "Localização UBS atual",
+      p_mediana_selected == "Selecionado (Ótimo)" & tem_posto_existente == "Não Existente" ~ "Localização Ótima",
+      tem_posto_existente == "Existente" & p_mediana_selected == "Não Selecionado" ~ "Localização UBS Atual",
       TRUE ~ "Nenhum"
     )
   )
 
 cores_mapa <- c(
-  "Ótimo e Existente" = "purple",
-  "Apenas Ótimo" = "blue",
-  "Apenas Existente" = "green",
-  "Nenhum" = "white"
+  "Atual/Ótima" = "purple",
+  "Localização Ótima" = "blue",
+  "Localização UBS Atual" = "green",
+  "Nenhum" = "lightgrey"
 )
 
 mapa_bairros_numerados_colorido <- ggplot() +
-  geom_sf(data = bairros_itacoatiara, aes(fill = category), color = "black") +
+  geom_sf(data = bairros_itacoatiara, aes(fill = category), color = "black", linewidth = 0.2) +
   geom_sf_text(data = bairros_itacoatiara, aes(label = label_id, geometry = st_centroid(geom)), size = 2, color = "black", check_overlap = TRUE, fontface = "bold") +
   scale_fill_manual(values = cores_mapa, name = "Legenda") +
   labs(
@@ -409,7 +384,6 @@ mapa_bairros_numerados_colorido <- ggplot() +
   theme_minimal()
 
 print(mapa_bairros_numerados_colorido)
-
 ```
 
 Para a p-mediana, os bairros que representam pontos ótimos para a localização das 7 UBS1s são: Araújo Costa (1), Colonia (4), Eduardo Braga II (7), Jacarezinho (10), Jardim Lorena (12), Mutirão (15)  e Poranga (18). Abaixo, apresenta-se a imagem do resultado com os respectivos identificadores dos bairros.
